@@ -23,7 +23,7 @@ sans jamais confondre chiffre d'affaires, trésorerie et bénéfice.
 
 | Domaine | Détail |
 | --- | --- |
-| Facturation | Factures et avoirs, brouillon → émise → partiellement payée → payée, annulation contrôlée, numérotation `FACT-0001` / `AV-0001` par organisation, remises (montant ou %) et TVA par ligne |
+| Facturation | Factures et avoirs, brouillon → émise → partiellement payée → payée, annulation contrôlée, numérotation `FACT-0001` / `AV-0001` par organisation, remises (montant ou %) et TVA par ligne, **partage WhatsApp et impression PDF** |
 | Clients & produits | Fiches clients (téléphone, WhatsApp, NINEA, adresse), catalogue produits avec prix et coût |
 | Achats | Fournisseur facultatif, référence facture fournisseur, catégorie (marchandises, matières premières, fournitures, équipement, transport, autre), quantité, prix unitaire, total, montant payé, restant dû, mode de paiement, notes |
 | Dépenses | Transport, loyer, salaires, électricité/internet, marketing, frais bancaires, autres — sans jamais recompter un achat |
@@ -70,7 +70,7 @@ dans le navigateur. Aucune clé, aucun backend n'est nécessaire.
 
 ```bash
 npm run typecheck  # TypeScript strict
-npm test           # 181 tests (unitaires, dépôt, SQL/RLS, interface)
+npm test           # 208 tests (unitaires, dépôt, SQL/RLS, parcours, interface)
 npm run build      # build de production
 ```
 
@@ -104,8 +104,9 @@ rappelées dans l'interface (bloc « Formules et limites » de la page Finances)
 - La TVA est calculée **après remise**, au prorata de chaque ligne ; la remise
   globale est plafonnée au sous-total.
 - Les totaux des factures sont recalculés **côté base** (`recalculate_invoice`) :
-  les montants envoyés par le navigateur sont ignorés, et les colonnes de totaux
-  ne sont pas modifiables par les clients (`revoke`/`grant` par colonne).
+  les montants envoyés par le navigateur sont ignorés ; l'`UPDATE` concédé aux
+  clients porte uniquement sur les colonnes métier, jamais sur les totaux, le
+  numéro, le type ni le lien à l'organisation.
 - Un paiement ne peut jamais dépasser le restant dû ; le statut *partiel* /
   *payé* est déduit des paiements, jamais saisi à la main.
 - Une facture émise est **immuable** : seule une annulation (si aucun paiement)
@@ -142,7 +143,8 @@ Facture de 10 × 8 000 FCFA + une ligne de 3 000 FCFA, remise 5 %, TVA 18 % :
 - `document_counters` n'accorde **aucun** privilège : la numérotation est
   uniquement gérée par trigger.
 - Les journaux d'export et d'erreurs ne contiennent jamais de secret ; aucune clé
-  d'API n'est stockée côté client.
+  d'API n'est stockée côté client. Le script `npm run audit:supabase` refuse de
+  démarrer si la clé fournie ressemble à une clé `service_role`.
 - Rien ne fait confiance au navigateur : contrôles SQL (CHECK), triggers de
   validation, politiques RLS, et revérification des totaux à l'affichage
   (`reconcileWithServer`, tolérance 1 FCFA).
@@ -170,10 +172,11 @@ triggers, enums) sans toucher aux objets de la migration initiale.
 ## Tests et vérifications
 
 ```bash
-npm test           # 181 tests, 12 fichiers
-npm run test:db    # tests SQL sur PostgreSQL embarqué (PGlite)
+npm test             # 208 tests, 15 fichiers
+npm run test:db      # tests SQL sur PostgreSQL embarqué (PGlite)
 npm run typecheck
 npm run build
+npm run audit:supabase   # audit lecture seule d'un projet Supabase réel
 ```
 
 | Fichier | Ce qui est vérifié |
@@ -188,11 +191,16 @@ npm run build
 | `tests/db/invoice-lifecycle.test.ts` (20) | Totaux serveur, numérotation, bornes, immuabilité, transitions de statut, avoirs, suppression de brouillon, protections d'organisation |
 | `tests/db/finance-summary.test.ts` (12) | Agrégats d'octobre, exclusion brouillons/annulées, période personnalisée, isolation, garde d'accès |
 | `tests/db/rls.test.ts` (13) | Isolation multi-tenant, refus d'insertion inter-organisations, permissions par rôle, compteurs, anonyme |
-| `tests/ui/finances.test.tsx` (8) | Indicateurs, périodes vides, permissions, formulaires achat/dépense, erreurs de saisie |
+| `tests/db/parcours-complet.test.ts` (9) | Parcours réel : facture → encaissement partiel → solde → achat 300 000 → transport 50 000 → indicateurs ; l'argent en caisse n'est jamais assimilé au bénéfice |
+| `tests/audit-supabase.test.ts` (6) | Logique de l'audit d'intégration Supabase (client simulé) : détection de table manquante, isolation, clé interdite |
+| `tests/ui/finances.test.tsx` (9) | Indicateurs, périodes vides, permissions, formulaires achat/dépense, erreurs de saisie, partage facture |
+| `tests/share.test.ts` (11) | Numéro WhatsApp international, message de partage, document imprimable, échappement HTML |
 | `tests/ui/finances-errors.test.tsx` (5) | Erreurs réseau, reprise, états vides, rendu mobile + desktop, accessibilité |
 
 Le détail des changements et des vérifications figure dans
-[`docs/RAPPORT.md`](docs/RAPPORT.md).
+[`docs/RAPPORT.md`](docs/RAPPORT.md). La procédure d'intégration à un projet
+Supabase existant, sans perte de données, est décrite dans
+[`docs/INTEGRATION-SUPABASE.md`](docs/INTEGRATION-SUPABASE.md).
 
 ## Structure du projet
 
@@ -214,8 +222,10 @@ src/
 supabase/
   migrations/             migrations versionnées (aller)
   rollbacks/              retours arrière documentés
-tests/                    unitaires, dépôt, SQL/RLS (PGlite), interface
+scripts/verify-supabase.mjs  audit lecture seule d'un projet Supabase réel
+tests/                    unitaires, dépôt, SQL/RLS (PGlite), parcours, interface
 docs/RAPPORT.md           rapport de changements et de vérifications
+docs/INTEGRATION-SUPABASE.md  branchement sur un projet existant, sans perte
 ```
 
 ## Limites connues

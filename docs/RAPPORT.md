@@ -108,8 +108,10 @@ Migration `20261027120000_initial_schema.sql` :
   recalculés côté serveur, remise plafonnée, TVA proratisée), immuabilité des
   factures émises et de leurs lignes, garde des paiements (plafond = restant dû,
   interdiction sur brouillon/annulée/avoir), protection du dernier propriétaire.
-- RLS activée sur toutes les tables + `revoke`/`grant` par colonne : les totaux de
-  facture ne sont pas modifiables par les clients.
+- RLS activée sur toutes les tables + `revoke`/`grant` par colonne : l'`UPDATE`
+  concédé aux clients porte sur les colonnes métier (client, statut, dates,
+  remise, notes) et **jamais** sur les totaux, le numéro, le type ou
+  `organization_id`. Les totaux restent recalculés par trigger.
 
 Migration `20261027120100_finance_module.sql` :
 
@@ -140,12 +142,70 @@ qu'elles ont créées.
 - Le frontend n'utilise que la clé `anon` ; la clé `service_role` n'apparaît nulle
   part (`.env.example` le rappelle).
 
+### 2.6 Réponses aux trois points de vigilance
+
+**a) Calcul du bénéfice.** Le coût des marchandises reste **estimé par catégorie
+d'achat**, faute de sorties de stock ; l'interface l'affiche comme tel et la marge
+brute passe à « Données insuffisantes » dès que le coût manque. Aucune évolution
+possible sans ajouter un suivi d'entrées/sorties de stock — c'est le prochain
+chantier, pas un correctif.
+
+**b) Données financières réelles.** Les chiffres d'octobre 2026 provenaient jusqu'ici
+des tests et de la base de démonstration. Un **audit en lecture seule** a été
+ajouté pour être exécuté sur le vrai projet Supabase :
+
+```bash
+SUPABASE_URL=... SUPABASE_ANON_KEY=... AUDIT_EMAIL=... AUDIT_PASSWORD=... \
+  npm run audit:supabase
+```
+
+Il vérifie la présence des 11 tables/vues, l'isolation de `organizations` et des
+achats, et la réponse de `finance_summary` sur le mois en cours. Il **n'écrit
+jamais** en base, refuse une clé `service_role` et sort en code 1 en cas d'échec.
+Il ne peut pas être exécuté ici (aucun projet Supabase accessible depuis
+l'environnement de développement) : sa logique est en revanche testée sur un
+client simulé (`tests/audit-supabase.test.ts`), y compris la détection d'une RLS
+manquante.
+
+**c) Intégration avec le projet existant.** Point le plus important, et le plus
+franc : **le dépôt fourni ne contenait aucun code**. La version livrée n'est donc
+pas une évolution de l'application existante, c'est une réécriture. Deux
+conséquences assumées :
+
+- Aucune donnée n'a pu être perdue : il n'y avait rien à perdre dans ce dépôt.
+  Mais si une autre base Supabase est en production, elle n'a **pas** été touchée
+  non plus — la reprise de données est à faire explicitement.
+- Certaines fonctionnalités de l'application d'origine ne sont pas dans ce dépôt.
+  Pour limiter la régression, le partage WhatsApp et l'impression PDF d'une
+  facture ont été ajoutés (voir 2.7), mais tout ce qui existait ailleurs doit
+  être recensé avant bascule.
+
+La procédure de bascule sans perte est décrite dans
+[`docs/INTEGRATION-SUPABASE.md`](INTEGRATION-SUPABASE.md) : sauvegarde
+obligatoire, inventaire du schéma existant, application contrôlée des migrations,
+reprise des données (sans insérer les colonnes générées), audit, recette, puis
+déploiement du frontend — qui ne joue aucune migration et n'écrase donc rien.
+
+### 2.7 Partage WhatsApp et impression PDF
+
+Ajoutés dans `src/lib/share.ts` et branchés sur la fiche facture :
+
+- **Partager sur WhatsApp** : lien `wa.me` avec message prêt (numéro, montant,
+  reste à payer, NINEA, moyens de paiement) ; le numéro sénégalais local est
+  converti au format international (`77 123 45 67` → `221771234567`).
+- **Imprimer / PDF** : document HTML autonome mis en page pour A4 (en-tête
+  entreprise, client, lignes, remise, TVA, totaux, règlements, notes) ouvert dans
+  un nouvel onglet puis envoyé à l'impression — « Enregistrer au format PDF » du
+  navigateur produit le fichier, sans dépendance ajoutée.
+- Toutes les valeurs saisies sont **échappées** : un nom de client contenant du
+  HTML ne peut pas injecter de script dans le document imprimé (testé).
+
 ## 3. Vérifications exécutées
 
 ```bash
 npm run typecheck   # OK, aucune erreur (TS strict, noUnusedLocals)
 npm run build       # OK (vite build, chunks vendor séparés)
-npm test            # 181 tests / 12 fichiers, tous verts
+npm test            # 208 tests / 15 fichiers, tous verts
 ```
 
 | Suite | Tests | Résultat |
@@ -162,12 +222,33 @@ npm test            # 181 tests / 12 fichiers, tous verts
 | `tests/db/rls.test.ts` | 13 | ✅ |
 | `tests/ui/finances.test.tsx` | 8 | ✅ |
 | `tests/ui/finances-errors.test.tsx` | 5 | ✅ |
+| `tests/db/parcours-complet.test.ts` | 9 | ✅ |
+| `tests/share.test.ts` | 11 | ✅ |
+| `tests/audit-supabase.test.ts` | 6 | ✅ |
 
 Les tests SQL s'exécutent sur **PostgreSQL embarqué (PGlite)**, rôle par rôle
 (`authenticated`, `anon`, superutilisateur), avec les deux migrations appliquées.
 PGlite n'embarque pas le schéma Supabase : le harnais crée un `auth.uid()` minimal
 et une table `auth.users` factice pour que le trigger de création d'organisation
 puisse fonctionner. Les politiques testées sont celles livrées.
+
+### 3.0 Parcours complet (nouveau)
+
+`tests/db/parcours-complet.test.ts` rejoue, dans PostgreSQL, le scénario du
+commerçant décrit en revue, étape par étape :
+
+| Étape | CA net | Trésorerie | Reste dû | Résultat estimé |
+| --- | --- | --- | --- | --- |
+| Facture 500 000 émise | 500 000 | 0 | 500 000 | 500 000 |
+| + encaissement 300 000 | 500 000 | 300 000 | 200 000 | 500 000 |
+| + solde 200 000 | 500 000 | 500 000 | 0 | 500 000 |
+| + 2ᵉ facture 300 000 | 800 000 | 500 000 | 300 000 | 800 000 |
+| + marchandises 300 000 payées | 800 000 | 200 000 | 300 000 | 500 000 |
+| + transport 50 000 | 800 000 | 150 000 | 300 000 | 450 000 |
+
+Le dernier test vérifie l'égalité qui compte : **150 000 en caisse + 300 000 chez
+les clients = 450 000 de résultat**. Le montant en caisse n'est jamais présenté
+comme un bénéfice.
 
 ### 3.1 Exemple chiffré vérifié en base (octobre 2026)
 
@@ -222,16 +303,32 @@ personnalisée étroite, appel hors organisation, appel anonyme.
 - **Chunking** : `react-vendor` et `supabase` séparés pour rester sous le seuil
   d'alerte et améliorer le cache.
 
-## 5. Limites connues
+## 5. Comment vérifier soi-même
+
+1. `npm install && npm test` → 208 tests.
+2. `npm run dev` → ouvrir `/finances`, `/finances/achats`, `/finances/depenses`,
+   `/factures` (fiche facture : WhatsApp + impression).
+3. Sur un projet Supabase réel : suivre `docs/INTEGRATION-SUPABASE.md`, puis
+   `npm run audit:supabase` (lecture seule).
+4. Comparer les indicateurs du vrai projet avec le tableau §3.0 pour un jeu
+   d'essai saisi à la main.
+
+## 6. Limites connues
 
 - Estimation de gestion, pas de comptabilité certifiée ; pas de déclaration TVA
   ni de liasse fiscale.
 - Pas de gestion de stock ni de coût unitaire réel par vente.
 - Le mode démo est local au navigateur (pas de partage entre appareils).
 - Les tests SQL valident le schéma et la RLS sous PGlite, pas le déploiement
-  Supabase lui-même (le harnais compense l'absence du schéma `auth`).
+  Supabase lui-même (le harnais compense l'absence du schéma `auth`). L'audit
+  `npm run audit:supabase` comble ce manque, mais **doit être lancé par toi** sur
+  ton projet : il n'a pas pu être exécuté depuis l'environnement de développement.
+- La reprise de données depuis une base existante n'a pas été testée : elle dépend
+  du schéma de cette base, qui n'était pas disponible ici.
+- Impression PDF via la boîte d'impression du navigateur : pas de génération PDF
+  côté serveur (pas de rendu identique garanti au pixel entre navigateurs).
 
-## 6. Fichiers principaux ajoutés
+## 7. Fichiers principaux ajoutés
 
 ```
 src/lib/finance.ts, money.ts, period.ts, permissions.ts, validation.ts, invoices.ts
@@ -245,6 +342,9 @@ supabase/migrations/20261027120000_initial_schema.sql
 supabase/migrations/20261027120100_finance_module.sql
 supabase/rollbacks/20261027120000_initial_schema.down.sql
 supabase/rollbacks/20261027120100_finance_module.down.sql
-tests/ … (12 fichiers, 181 tests)
+scripts/verify-supabase.mjs, scripts/audit-core.mjs, scripts/audit-core.d.mts
+src/lib/share.ts (WhatsApp + impression PDF)
+tests/db/parcours-complet.test.ts, tests/share.test.ts, tests/audit-supabase.test.ts
+tests/ … (15 fichiers, 208 tests)
 README.md, docs/RAPPORT.md
 ```

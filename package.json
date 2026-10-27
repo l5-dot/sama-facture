@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Sama Facture — facturation, achats, dépenses et pilotage financier pour les PME sénégalaises",
+  "description": "Sama Facture \u2014 facturation, achats, d\u00e9penses et pilotage financier pour les PME s\u00e9n\u00e9galaises",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
@@ -11,7 +11,8 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:db": "vitest run tests/db"
+    "test:db": "vitest run tests/db",
+    "audit:supabase": "node scripts/verify-supabase.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.58.0",

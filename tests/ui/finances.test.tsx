@@ -115,6 +115,27 @@ describe('page Finances', () => {
   });
 });
 
+describe('partage d’une facture', () => {
+  it('propose l’impression et le partage WhatsApp depuis la fiche facture', async () => {
+    const user = userEvent.setup();
+    renderApp('/factures');
+    await screen.findByRole('heading', { name: 'Factures', level: 1 });
+
+    await user.click(
+      (await screen.findAllByRole('button', { name: /Voir la facture FACT-/i }))[0],
+    );
+    const dialog = await screen.findByRole('dialog');
+    const form = within(dialog);
+
+    const printButton = form.getByRole('button', { name: /Imprimer \/ PDF/i });
+    expect(printButton).toBeInTheDocument();
+
+    const share = form.getByRole('link', { name: /Partager sur WhatsApp/i });
+    expect(share).toHaveAttribute('href', expect.stringContaining('https://wa.me/'));
+    expect(share).toHaveAttribute('rel', expect.stringContaining('noopener'));
+  });
+});
+
 describe('permissions dans l’interface', () => {
   it('affiche les achats en lecture seule pour un vendeur', async () => {
     resetRepositoryInstance();

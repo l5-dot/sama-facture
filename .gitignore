@@ -13,3 +13,6 @@ test-results
 
 # Build TypeScript incrémental
 *.tsbuildinfo
+
+# Archives générées pour revue
+exports/

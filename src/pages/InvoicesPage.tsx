@@ -7,6 +7,7 @@ import {
   FileText,
   Pencil,
   Plus,
+  Printer,
   Search,
   Send,
   Trash2,
@@ -18,12 +19,13 @@ import { formatDateFR } from '../lib/dates';
 import { formatMoney } from '../lib/money';
 import { INVOICE_STATUS_LABELS, PAYMENT_METHOD_LABELS } from '../lib/constants';
 import { isConfirmedInvoice } from '../lib/finance';
+import { invoicePrintHtml, printInvoice, whatsappShareUrl } from '../lib/share';
 import {
   canDeleteInvoice,
   canManageInvoices,
   canRecordPayment,
 } from '../lib/permissions';
-import type { Invoice, InvoiceStatus } from '../lib/types';
+import type { Client, Invoice, InvoiceStatus, Organization } from '../lib/types';
 import type { InvoiceDraftInput, PaymentInput } from '../lib/data/types';
 import { InvoiceFormModal } from '../components/InvoiceFormModal';
 import { PaymentModal } from '../components/PaymentModal';
@@ -61,10 +63,14 @@ function InvoiceDetail({
   invoice,
   payments,
   currency,
+  organization,
+  client,
   onClose,
   onPay,
   onEmit,
   onCancel,
+  onPrintBlocked,
+
   canEdit,
   canPay,
   canCancel,
@@ -72,6 +78,8 @@ function InvoiceDetail({
   invoice: Invoice;
   payments: ReturnType<typeof useApp>['data']['payments'];
   currency: string;
+  organization: Organization | null;
+  client: Client | null;
   onClose: () => void;
   onPay: () => void;
   onEmit: () => void;
@@ -79,6 +87,7 @@ function InvoiceDetail({
   canEdit: boolean;
   canPay: boolean;
   canCancel: boolean;
+  onPrintBlocked: () => void;
 }) {
   const invoicePayments = payments.filter((payment) => payment.invoiceId === invoice.id);
   return (
@@ -110,6 +119,24 @@ function InvoiceDetail({
                 Encaisser
               </Button>
             )}
+          <Button
+            variant="secondary"
+            onClick={() => {
+              const html = invoicePrintHtml({ invoice, organization, client });
+              if (!printInvoice(html)) onPrintBlocked();
+            }}
+            icon={<Printer className="size-4" />}
+          >
+            Imprimer / PDF
+          </Button>
+          <a
+            className="inline-flex items-center gap-2 rounded-lg border border-sand-300 bg-white px-3 py-2 text-sm font-medium text-ink-800 transition hover:bg-sand-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+            href={whatsappShareUrl({ invoice, organization, client })}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Partager sur WhatsApp
+          </a>
           <Button variant="secondary" onClick={onClose}>
             Fermer
           </Button>
@@ -633,6 +660,8 @@ export default function InvoicesPage() {
           invoice={data.invoices.find((invoice) => invoice.id === detail.id) ?? detail}
           payments={data.payments}
           currency={currency}
+          organization={activeOrg?.organization ?? null}
+          client={data.clients.find((item) => item.id === detail.clientId) ?? null}
           onClose={() => setDetail(null)}
           onPay={() => {
             setPaying(detail);
@@ -646,6 +675,12 @@ export default function InvoicesPage() {
           canEdit={canWriteInvoices}
           canPay={canPay}
           canCancel={canWriteInvoices}
+          onPrintBlocked={() =>
+            notify(
+              'error',
+              'Impression bloquée par le navigateur : autorisez les fenêtres surgissantes.',
+            )
+          }
         />
       )}
 
